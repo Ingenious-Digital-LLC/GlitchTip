@@ -1,0 +1,61 @@
+name: Upstream Sync & Deploy
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # Every Monday at 10am UTC (staggered from Rybbit at 9am)
+  workflow_dispatch:       # Manual trigger
+
+jobs:
+  check-and-deploy:
+    name: Check for Updates & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Docker Hub for new image
+        id: check
+        run: |
+          # Get the latest digest from Docker Hub
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:glitchtip/glitchtip:pull" | jq -r '.token')
+          REMOTE_DIGEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://registry-1.docker.io/v2/glitchtip/glitchtip/manifests/latest" | jq -r '.digest // empty')
+
+          if [ -z "$REMOTE_DIGEST" ]; then
+            echo "Failed to fetch remote digest"
+            exit 1
+          fi
+
+          echo "remote_digest=$REMOTE_DIGEST" >> $GITHUB_OUTPUT
+          echo "Remote digest: $REMOTE_DIGEST"
+
+      - name: Deploy latest to production
+        uses: appleboy/ssh-action@v1
+        env:
+          REMOTE_DIGEST: ${{ steps.check.outputs.remote_digest }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: REMOTE_DIGEST
+          script: |
+            # Get current running digest
+            CURRENT=$(docker service inspect glitchtip_web --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null | grep -o 'sha256:[a-f0-9]*' || echo "none")
+
+            echo "Current: $CURRENT"
+            echo "Remote:  $REMOTE_DIGEST"
+
+            if [ "$CURRENT" = "$REMOTE_DIGEST" ]; then
+              echo "Already running latest — no update needed"
+              exit 0
+            fi
+
+            echo "New version detected — deploying..."
+
+            # Pull latest images
+            docker pull glitchtip/glitchtip:latest
+
+            # Update both web and worker services
+            docker service update --image glitchtip/glitchtip:latest glitchtip_web
+            docker service update --image glitchtip/glitchtip:latest glitchtip_worker
+
+            echo "Deploy complete"

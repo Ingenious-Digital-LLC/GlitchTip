@@ -38,9 +38,21 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: REMOTE_DIGEST
           script: |
-            # Get current running digest
-            CURRENT=$(docker service inspect glitchtip_web --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null | grep -o 'sha256:[a-f0-9]*' || echo "none")
+            # Find GlitchTip services dynamically (Dokploy prefixes stack names)
+            WEB_SVC=$(docker service ls --format '{{.Name}}' | grep 'glitchtip-web' | head -1)
+            WORKER_SVC=$(docker service ls --format '{{.Name}}' | grep 'glitchtip-worker' | head -1)
 
+            if [ -z "$WEB_SVC" ] || [ -z "$WORKER_SVC" ]; then
+              echo "ERROR: Could not find GlitchTip services"
+              docker service ls --format '{{.Name}}' | grep -i glitch
+              exit 1
+            fi
+
+            # Get current running digest
+            CURRENT=$(docker service inspect "$WEB_SVC" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null | grep -o 'sha256:[a-f0-9]*' || echo "none")
+
+            echo "Web service: $WEB_SVC"
+            echo "Worker service: $WORKER_SVC"
             echo "Current: $CURRENT"
             echo "Remote:  $REMOTE_DIGEST"
 
@@ -55,7 +67,7 @@ jobs:
             docker pull glitchtip/glitchtip:latest
 
             # Update both web and worker services
-            docker service update --image glitchtip/glitchtip:latest glitchtip_web
-            docker service update --image glitchtip/glitchtip:latest glitchtip_worker
+            docker service update --image glitchtip/glitchtip:latest "$WEB_SVC"
+            docker service update --image glitchtip/glitchtip:latest "$WORKER_SVC"
 
             echo "Deploy complete"

@@ -14,11 +14,12 @@ jobs:
       - name: Check Docker Hub for new image
         id: check
         run: |
-          # Get the latest digest from Docker Hub
+          # Get the latest digest from Docker Hub (OCI format — digest is in response header)
           TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:glitchtip/glitchtip:pull" | jq -r '.token')
-          REMOTE_DIGEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-            "https://registry-1.docker.io/v2/glitchtip/glitchtip/manifests/latest" | jq -r '.digest // empty')
+          REMOTE_DIGEST=$(curl -sI -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://registry-1.docker.io/v2/glitchtip/glitchtip/manifests/latest" \
+            | grep -i 'docker-content-digest' | awk '{print $2}' | tr -d '\r')
 
           if [ -z "$REMOTE_DIGEST" ]; then
             echo "Failed to fetch remote digest"
